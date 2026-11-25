@@ -1,10 +1,16 @@
 name: 打包发布
 
-# 推送 v0.1.1 这样的 tag → 构建安装包并发布到 GitHub Release
-# 在 Actions 页面手动触发 → 只构建、产物存在 Actions 里，不发 Release
+# 推送到 main → 读取 quicktext/version.py 里的版本号构建安装包；
+#                若远端还没有 vX.Y.Z 这个 tag，就自动打 tag 并发布 GitHub Release。
+# 推送 vX.Y.Z 的 tag（手动补发）→ 直接用 tag 名构建并发布 Release。
+# 在 Actions 页面手动触发 → 只构建，产物存 Actions，不发 Release。
+#
+# 发版流程：只改 quicktext/version.py 的 __version__，提交并推到 main。
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
   workflow_dispatch:
@@ -32,6 +38,9 @@ jobs:
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
+        with:
+          # 需要完整历史才能判断 tag 是否已存在
+          fetch-depth: 0
 
       - name: 安装 Python
         uses: actions/setup-python@v5
@@ -49,21 +58,39 @@ jobs:
       - name: 解析版本号
         id: ver
         run: |
-          if ('${{ github.ref_type }}' -eq 'tag') {
-            $v = '${{ github.ref_name }}' -replace '^v', ''
-            if ($v -notmatch '^\d+\.\d+\.\d+$') {
-              Write-Error "tag 名称需符合 vX.Y.Z 规范，当前为 ${{ github.ref_name }}"
-              exit 1
-            }
-            # 让 exe 内的版本资源与安装包一致
-            (Get-Content quicktext/version.py -Raw -Encoding UTF8) `
-              -replace '__version__\s*=\s*"[^"]*"', "__version__ = `"$v`"" `
-              | Set-Content quicktext/version.py -Encoding UTF8 -NoNewline
+          $refType = '${{ github.ref_type }}'
+          $refName = '${{ github.ref_name }}'
+
+          if ($refType -eq 'tag') {
+            # 手动补发：以 tag 名为准
+            $v = $refName -replace '^v', ''
+            $tag = $refName
           } else {
+            # main / 手动触发：以 version.py 为唯一来源
             $v = (Select-String -Path quicktext/version.py -Pattern '__version__\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+            $tag = "v$v"
           }
+
+          if ($v -notmatch '^\d+\.\d+\.\d+$') {
+            throw "版本号需符合 X.Y.Z 规范，当前为 $v"
+          }
+
+          # 只有 tag 触发的运行、或 main 上新版本尚未发过时，才发布 Release
+          $publish = $false
+          if ($refType -eq 'tag') {
+            $publish = $true
+          } elseif ($refType -eq 'branch') {
+            git rev-parse -q --verify "refs/tags/$tag" *> $null
+            if ($LASTEXITCODE -ne 0) {
+              $remote = git ls-remote --tags origin "refs/tags/$tag"
+              $publish = [string]::IsNullOrWhiteSpace($remote)
+            }
+          }
+
           "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          Write-Host "本次构建版本：$v"
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "publish=$($publish.ToString().ToLower())" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          Write-Host "本次构建版本：$v（tag: $tag，发布 Release: $publish）"
 
       - name: PyInstaller 打包 exe
         run: pyinstaller --clean --noconfirm QuickText.spec
@@ -93,9 +120,12 @@ jobs:
           retention-days: 30
 
       - name: 发布 GitHub Release
-        if: github.ref_type == 'tag'
+        if: steps.ver.outputs.publish == 'true'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: ${{ steps.ver.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           files: dist/QuickText_setup_*.exe
           fail_on_unmatched_files: true
           generate_release_notes: true

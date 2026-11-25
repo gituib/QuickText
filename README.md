@@ -7,7 +7,7 @@
 - 语言 / 界面：简体中文
 - 平台：Windows 10 / 11（x64），无需管理员权限即可安装与运行
 - 技术栈：Python 3.13 + PySide6（Qt Widgets）
-- 当前版本：v0.1.0
+- 当前版本：v0.1.1
 - 联网：**完全不联网**，不收集任何数据（详见[隐私说明](file:///d:/软件开发/楼月/隐私说明.md)）
 
 ---
@@ -328,7 +328,7 @@ python quicktext/main.py
 ├── QuickText.iss             Inno Setup 安装包脚本
 ├── requirements.txt
 ├── 隐私说明.md
-└── .github/workflows/build.yml   打 tag 自动构建并发布 Release
+└── .github/workflows/build.yml   推 main 自动构建，新版本自动打 tag 并发布 Release
 ```
 
 `dist/` 与 `build/` 是构建产物，已在 `.gitignore` 中排除，可随时重新生成。
@@ -351,29 +351,30 @@ pyinstaller --clean --noconfirm QuickText.spec
 需要安装 [Inno Setup 6](https://jrsoftware.org/isinfo.php)。
 
 ```powershell
-& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=0.1.0 QuickText.iss
+& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=0.1.1 QuickText.iss
 ```
 
-产物 `dist\QuickText_setup_0.1.0.exe`。不传 `/DMyAppVersion` 则使用脚本内默认值。
+产物 `dist\QuickText_setup_0.1.1.exe`。不传 `/DMyAppVersion` 则使用脚本内默认值。
 
 ### 正式发布（CI 自动完成）
 
-版本号只有一个来源：[quicktext/version.py](file:///d:/软件开发/楼月/quicktext/version.py)。发布就是打 tag：
+版本号只有一个来源：[quicktext/version.py](file:///d:/软件开发/楼月/quicktext/version.py)。发布只需改版本号并推 main：
 
 ```powershell
-git tag v0.1.1
-git push origin v0.1.1
+# 修改 quicktext/version.py 里的 __version__（例如 "0.1.2"）
+git commit -am "chore: 发布 v0.1.2"
+git push origin main
 ```
 
 GitHub Actions（[build.yml](file:///d:/软件开发/楼月/.github/workflows/build.yml)）会在 `windows-latest` 上依次：
 
 1. 安装 Python 3.13 与依赖，`choco install innosetup`
-2. 用 tag 名（去掉前缀 `v`，必须为 `x.y.z` 三段式）覆盖 `version.py`，确保 exe、安装包、Release 三处版本一致
+2. 读取 `version.py` 的版本号（必须为 `x.y.z` 三段式），exe、安装包、Release 三处共用
 3. PyInstaller 打 exe → 校验产物存在 → Inno Setup 打安装包
 4. 上传 Actions 产物（保留 30 天）
-5. tag 触发时自动发布 GitHub Release，附上安装包和自动生成的更新说明
+5. 远端还没有 `vX.Y.Z` 这个 tag 时，自动打 tag 并发布 GitHub Release，附上安装包和自动生成的更新说明；该版本已发布过则只构建不重复发布
 
-在 Actions 页面**手动触发**（`workflow_dispatch`）则只构建、产物留在 Actions 里，不发 Release——适合验证改动是否可打包。
+例外情况：手动推送 `git tag v0.1.2 && git push origin v0.1.2` 时直接以 tag 名构建并发布；在 Actions 页面**手动触发**（`workflow_dispatch`）则只构建、产物留在 Actions 里，不发 Release——适合验证改动是否可打包。
 
 ---
 
