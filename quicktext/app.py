@@ -94,6 +94,13 @@ class AppController(QObject):
             self.app_index.start_scan(bool(self.store.settings.get("launcherIncludeNoise", False)))
         if self.store.recovered_from_backup:
             QTimer.singleShot(300, lambda: self.notify("数据文件损坏，已从自动备份恢复。"))
+        if self.store.migrated_to_encrypted:
+            QTimer.singleShot(300, lambda: self.notify(
+                "本机数据文件已按当前 Windows 账户加密；「导出」生成的备份仍是明文，可在其它电脑导入。"))
+        if self.store.data_quarantined:
+            kept = "、".join(os.path.basename(p) for p in self.store.data_quarantined)
+            QTimer.singleShot(300, lambda: self.notify(
+                "数据无法解密（可能更换了 Windows 账户），已原样保留为 " + kept + "，本次以空列表启动。", 8000))
         if bool(self.store.settings.get("showFloatingPanel", False)):
             self.floating.show()
             self.window.set_panel_checked(True)

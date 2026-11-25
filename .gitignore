@@ -21,3 +21,4 @@ quicktext/assets/*.svg
 
 # ---- 调试脚本产出的截图 ----
 tools/shots/
+.screenshots/.tmp/

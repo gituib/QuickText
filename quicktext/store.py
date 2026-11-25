@@ -1,11 +1,14 @@
 """短语数据存储：JSON 文件（与 3.2 版结构兼容）。"""
+import base64
 import json
 import os
 import shutil
+import time
 import uuid
 
 from PySide6.QtCore import QTimer
 
+from . import winapi
 from .winapi import data_file, MOD_ALT, MOD_CONTROL, hotkey_text
 
 _pinyin = None
@@ -55,6 +58,12 @@ RESERVED_GROUPS = ("未分组", "全部短语")
 
 MASK_CAP = 40                  # 遮挡圆点的上限，避免超长正文生成同样超长的字符串
 
+ENC_ENVELOPE = "dpapi1"        # 磁盘文件的外层 JSON 信封标记，blob 是 DPAPI 密文的 base64
+
+DECRYPT_ERROR = ("数据文件无法解密：本机数据与当前 Windows 用户账户绑定。"
+                 "若更换了 Windows 账户或密码被重置，"
+                 "请用「导出」生成的备份文件通过「导入」恢复数据。")
+
 
 def mask_text(text):
     """按字符数生成等长圆点，用于在界面上遮挡短语正文。"""
@@ -80,12 +89,18 @@ class StoreError(Exception):
     pass
 
 
+class DecryptError(StoreError):
+    """存档为加密信封但当前 Windows 账户无法解密。"""
+
+
 class PhraseStore:
     def __init__(self, path=None):
         self.path = path or data_file()
         self.phrases = []
         self.settings = dict(DEFAULT_SETTINGS)
         self.recovered_from_backup = False
+        self.migrated_to_encrypted = False
+        self.data_quarantined = []
         self._save_timer = QTimer()
         self._save_timer.setSingleShot(True)
         self._save_timer.setInterval(SAVE_DELAY)
@@ -95,6 +110,7 @@ class PhraseStore:
     # ---------------------------------------------------------------- io
     @staticmethod
     def _read_file(path):
+        """读取存档，返回 (payload, 是否为未加密的明文文件)。"""
         try:
             with open(path, "r", encoding="utf-8-sig") as fh:
                 data = json.load(fh)
@@ -102,7 +118,20 @@ class PhraseStore:
             raise StoreError("无法读取数据文件：%s" % exc) from exc
         if not isinstance(data, dict):
             raise StoreError("数据文件格式不正确。")
-        return data
+        if data.get("enc") != ENC_ENVELOPE:
+            return data, True
+        try:
+            blob = base64.b64decode(str(data.get("blob") or ""), validate=True)
+            plain = winapi.unprotect(blob)
+        except Exception as exc:
+            raise DecryptError(DECRYPT_ERROR) from exc
+        try:
+            payload = json.loads(plain.decode("utf-8"))
+        except ValueError as exc:
+            raise StoreError("数据文件格式不正确。") from exc
+        if not isinstance(payload, dict):
+            raise StoreError("数据文件格式不正确。")
+        return payload, False
 
     def _apply(self, data):
         items = data.get("phrases") or []
@@ -134,26 +163,58 @@ class PhraseStore:
     def load(self):
         """优先读取主文件；主文件损坏时回退到最近一次自动备份。"""
         self.recovered_from_backup = False
+        self.migrated_to_encrypted = False
+        self.data_quarantined = []
         backup = self._backup_path()
         candidates = [self.path]
         if os.path.exists(backup):
             candidates.append(backup)
         first_error = None
+        decrypt_failed = False
         for path in candidates:
             if not os.path.exists(path):
                 continue
             try:
-                data = self._read_file(path)
+                data, plain = self._read_file(path)
+            except DecryptError as exc:
+                decrypt_failed = True
+                if first_error is None:
+                    first_error = exc
+                continue
             except StoreError as exc:
                 if first_error is None:
                     first_error = exc
                 continue
             self._apply(data)
             self.recovered_from_backup = path != self.path
+            # 老版本的明文存档在本次读取后就地升级为加密格式
+            if plain:
+                try:
+                    self.migrated_to_encrypted = self.save()
+                except StoreError:
+                    pass
             return
         if first_error is not None:
-            raise first_error
+            if not decrypt_failed:
+                raise first_error
+            # 更换 Windows 账户或密码被重置后 DPAPI 无法解密。此时若直接退出，用户连用
+            # 「导入」恢复的机会都没有；改为把旧存档原样改名保留，再以空库启动。
+            stamp = time.strftime("%Y%m%d-%H%M%S")
+            self.data_quarantined = [name for name in (self._quarantine(path, stamp)
+                                                       for path in candidates) if name]
+            self._apply({})
+            self.save()
+            return
         self.save()
+
+    def _quarantine(self, path, stamp):
+        """把无法解密的存档改名留存，不覆盖也不删除。"""
+        target = "%s.unreadable-%s" % (path, stamp)
+        try:
+            os.replace(path, target)
+        except OSError:
+            return None
+        return target
 
     def save(self):
         payload = {
@@ -161,14 +222,27 @@ class PhraseStore:
             "settings": self.settings,
             "version": 1,
         }
+        text = json.dumps(payload, ensure_ascii=False, indent=4)
+        encrypted = False
+        if winapi.encryption_available():
+            # 加密失败时降级写明文，绝不能因为加密问题丢用户数据或阻断保存
+            try:
+                cipher = winapi.protect(text.encode("utf-8"))
+                blob = base64.b64encode(cipher).decode("ascii")
+                text = json.dumps({"enc": ENC_ENVELOPE, "blob": blob},
+                                  ensure_ascii=False, indent=4)
+                encrypted = True
+            except Exception:
+                pass
         tmp = self.path + ".tmp"
         try:
             with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump(payload, fh, ensure_ascii=False, indent=4)
+                fh.write(text)
             os.replace(tmp, self.path)
         except OSError as exc:
             raise StoreError("无法写入数据文件：%s" % exc) from exc
         self._refresh_backup()
+        return encrypted
 
     def _backup_path(self):
         return self.path + ".bak"

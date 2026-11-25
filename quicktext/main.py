@@ -1,7 +1,7 @@
 """
-QuickText - 文本自动输入器（复刻自 Cok Auto Typer / 楼月文本自动输入器 3.2）
+QuickText - 文本自动输入器
 
-Author: clone build
+通过全局热键唤起短语面板，将预置短语输入到当前焦点窗口。
 """
 import sys
 import os

@@ -1,5 +1,6 @@
 """公共工具：配置目录、文案、热键文本化。"""
 import os
+import shutil
 import sys
 
 APP_NAME = "QuickText"
@@ -12,6 +13,21 @@ if _win:
     from ctypes import wintypes
 
     _user32 = ctypes.WinDLL("user32", use_last_error=True)
+    _crypt32 = ctypes.WinDLL("crypt32", use_last_error=True)
+    _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    class _DATA_BLOB(ctypes.Structure):
+        _fields_ = [("cbData", wintypes.DWORD),
+                    ("pbData", ctypes.POINTER(ctypes.c_char))]
+
+    _crypt32.CryptProtectData.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR, ctypes.c_void_p,
+                                          ctypes.c_void_p, ctypes.c_void_p, wintypes.DWORD,
+                                          ctypes.c_void_p]
+    _crypt32.CryptProtectData.restype = wintypes.BOOL
+    _crypt32.CryptUnprotectData.argtypes = _crypt32.CryptProtectData.argtypes
+    _crypt32.CryptUnprotectData.restype = wintypes.BOOL
+    _kernel32.GlobalFree.argtypes = [ctypes.c_void_p]
+    _kernel32.GlobalFree.restype = ctypes.c_void_p
 
     class _MSG(ctypes.Structure):
         _fields_ = [("hWnd", wintypes.HWND), ("message", wintypes.UINT),
@@ -33,13 +49,68 @@ if _win:
     class _LASTINPUTINFO(ctypes.Structure):
         _fields_ = [("cbSize", wintypes.UINT), ("dwTime", wintypes.DWORD)]
 else:
-    _MSG = _GUITHREADINFO = _POINT = _LASTINPUTINFO = None
+    _MSG = _GUITHREADINFO = _POINT = _LASTINPUTINFO = _DATA_BLOB = None
+
+
+DATA_SUBDIR = "data"
+LEGACY_FILES = ("phrases.json", "phrases.json.bak", "apps.json")
+
+
+def _user_data_dir() -> str:
+    """旧版数据位置，也是安装目录不可写时的回退位置。"""
+    base = os.environ.get("APPDATA") or os.path.expanduser("~")
+    return os.path.join(base, ORG_NAME, "AutoTyper")
+
+
+def _writable(path: str) -> bool:
+    probe = os.path.join(path, ".write-test")
+    try:
+        with open(probe, "w", encoding="utf-8"):
+            pass
+        os.remove(probe)
+        return True
+    except OSError:
+        return False
+
+
+def _install_data_dir():
+    """打包运行时数据随程序放在安装目录的 data 子目录下。
+
+    开发模式没有 exe 同级目录；选择「为所有用户安装」时程序落在 Program Files，
+    普通权限写不进去。这两种情况返回 None，由调用方回退到用户目录。
+    """
+    if not getattr(sys, "frozen", False):
+        return None
+    path = os.path.join(os.path.dirname(os.path.abspath(sys.executable)), DATA_SUBDIR)
+    try:
+        os.makedirs(path, exist_ok=True)
+    except OSError:
+        return None
+    return path if _writable(path) else None
+
+
+def _import_legacy(new_dir: str) -> None:
+    """首次启动时把旧版存放在 %APPDATA% 的数据复制过来，原文件保留不动。"""
+    old_dir = _user_data_dir()
+    if not os.path.isdir(old_dir):
+        return
+    for name in LEGACY_FILES:
+        src = os.path.join(old_dir, name)
+        dst = os.path.join(new_dir, name)
+        if os.path.exists(src) and not os.path.exists(dst):
+            try:
+                shutil.copy2(src, dst)
+            except OSError:
+                pass
 
 
 def config_dir() -> str:
-    base = os.environ.get("APPDATA") or os.path.expanduser("~")
-    path = os.path.join(base, ORG_NAME, "AutoTyper")
-    os.makedirs(path, exist_ok=True)
+    path = _install_data_dir()
+    if path is None:
+        path = _user_data_dir()
+        os.makedirs(path, exist_ok=True)
+    else:
+        _import_legacy(path)
     return path
 
 
@@ -51,6 +122,49 @@ def app_icon_path() -> str:
     base = os.path.dirname(os.path.abspath(__file__))
     p = os.path.join(base, "assets", "app.ico")
     return p if os.path.exists(p) else ""
+
+
+# ---------------------------------------------------------------------------
+# DPAPI 数据加密：密文与当前 Windows 用户账户绑定，不需要管理密钥
+# ---------------------------------------------------------------------------
+_CRYPTPROTECT_UI_FORBIDDEN = 0x01
+
+
+def encryption_available() -> bool:
+    return _win
+
+
+def protect(data: bytes) -> bytes:
+    if not _win:
+        raise RuntimeError("当前系统不支持 DPAPI 加密。")
+    raw = bytes(data)
+    # 输入缓冲区必须由局部变量持有，否则调用期间可能被回收
+    buf = ctypes.create_string_buffer(raw, len(raw))
+    blob_in = _DATA_BLOB(len(raw), buf)
+    blob_out = _DATA_BLOB()
+    if not _crypt32.CryptProtectData(ctypes.byref(blob_in), None, None, None, None,
+                                     _CRYPTPROTECT_UI_FORBIDDEN, ctypes.byref(blob_out)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        return ctypes.string_at(blob_out.pbData, blob_out.cbData)
+    finally:
+        _kernel32.GlobalFree(blob_out.pbData)
+
+
+def unprotect(data: bytes) -> bytes:
+    if not _win:
+        raise RuntimeError("当前系统不支持 DPAPI 解密。")
+    raw = bytes(data)
+    buf = ctypes.create_string_buffer(raw, len(raw))
+    blob_in = _DATA_BLOB(len(raw), buf)
+    blob_out = _DATA_BLOB()
+    if not _crypt32.CryptUnprotectData(ctypes.byref(blob_in), None, None, None, None,
+                                       _CRYPTPROTECT_UI_FORBIDDEN, ctypes.byref(blob_out)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        return ctypes.string_at(blob_out.pbData, blob_out.cbData)
+    finally:
+        _kernel32.GlobalFree(blob_out.pbData)
 
 
 # ---------------------------------------------------------------------------
