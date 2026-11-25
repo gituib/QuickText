@@ -1,0 +1,101 @@
+name: 打包发布
+
+# 推送 v0.1.1 这样的 tag → 构建安装包并发布到 GitHub Release
+# 在 Actions 页面手动触发 → 只构建、产物存在 Actions 里，不发 Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: '3.13'
+  INNO_DIR_32: 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+  INNO_DIR_64: 'C:\Program Files\Inno Setup 6\ISCC.exe'
+
+jobs:
+  windows:
+    name: 构建 Windows 安装包
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: 安装构建依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          choco install innosetup --no-progress -y
+
+      - name: 解析版本号
+        id: ver
+        run: |
+          if ('${{ github.ref_type }}' -eq 'tag') {
+            $v = '${{ github.ref_name }}' -replace '^v', ''
+            if ($v -notmatch '^\d+\.\d+\.\d+$') {
+              Write-Error "tag 名称需符合 vX.Y.Z 规范，当前为 ${{ github.ref_name }}"
+              exit 1
+            }
+            # 让 exe 内的版本资源与安装包一致
+            (Get-Content quicktext/version.py -Raw -Encoding UTF8) `
+              -replace '__version__\s*=\s*"[^"]*"', "__version__ = `"$v`"" `
+              | Set-Content quicktext/version.py -Encoding UTF8 -NoNewline
+          } else {
+            $v = (Select-String -Path quicktext/version.py -Pattern '__version__\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+          }
+          "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          Write-Host "本次构建版本：$v"
+
+      - name: PyInstaller 打包 exe
+        run: pyinstaller --clean --noconfirm QuickText.spec
+
+      - name: 校验 exe 产物
+        run: |
+          if (-not (Test-Path dist\QuickText.exe)) { throw 'dist\QuickText.exe 未生成' }
+          $size = (Get-Item dist\QuickText.exe).Length
+          Write-Host ("QuickText.exe {0:N1} MB" -f ($size / 1MB))
+
+      - name: Inno Setup 生成安装包
+        run: |
+          $iscc = '${{ env.INNO_DIR_32 }}'
+          if (-not (Test-Path $iscc)) { $iscc = '${{ env.INNO_DIR_64 }}' }
+          if (-not (Test-Path $iscc)) { throw '未找到 ISCC.exe' }
+          & $iscc "/DMyAppVersion=${{ steps.ver.outputs.version }}" QuickText.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC 编译失败，退出码 $LASTEXITCODE" }
+
+      - name: 上传 Actions 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: QuickText-${{ steps.ver.outputs.version }}-windows
+          path: |
+            dist/QuickText.exe
+            dist/QuickText_setup_*.exe
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: 发布 GitHub Release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/QuickText_setup_*.exe
+          fail_on_unmatched_files: true
+          generate_release_notes: true

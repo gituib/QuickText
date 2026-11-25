@@ -1,0 +1,23 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ---- PyInstaller ----
+build/
+QuickText_build/
+*.manifest
+
+# ---- 发布产物（可由 QuickText.iss / QuickText.spec 重新构建）----
+dist/
+
+# ---- 构建日志 ----
+*.log
+
+# ---- 运行时自动生成的 QSS 图标，由 quicktext/theme.py 落地 ----
+quicktext/assets/*.svg
+
+# ---- 调试脚本产出的截图 ----
+tools/shots/
