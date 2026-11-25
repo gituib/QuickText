@@ -8,4 +8,4 @@
     QuickText.spec 读取此处生成 exe 的版本资源；
     QuickText.iss 通过 /DMyAppVersion 接收同一版本，不在脚本内二次硬编码。
 """
-__version__ = "0.1.1"
+__version__ = "0.1.2"

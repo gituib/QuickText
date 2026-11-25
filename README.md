@@ -7,7 +7,7 @@
 - 语言 / 界面：简体中文
 - 平台：Windows 10 / 11（x64），无需管理员权限即可安装与运行
 - 技术栈：Python 3.13 + PySide6（Qt Widgets）
-- 当前版本：v0.1.1
+- 当前版本：v0.1.2
 - 联网：**完全不联网**，不收集任何数据（详见[隐私说明](file:///d:/软件开发/楼月/隐私说明.md)）
 
 ---
@@ -60,7 +60,7 @@
 
 ### 方式二：绿色版单文件
 
-不想装安装包，可以直接使用 PyInstaller 产出的单文件 `QuickText.exe`（在 Actions 构建产物中，或按[本地打 exe](#本地打-exe)自行构建）。免安装、双击即用，数据写在该 exe 同级的 `data` 子目录里，整个文件夹拷走就是完整迁移。
+不想装安装包，直接从 **Releases** 下载 `QuickText_<版本号>-portable.zip`，解压后双击 `QuickText.exe` 即用。免安装，数据保存在解压目录的 `data` 子目录里，整个文件夹拷走就是完整迁移，删除文件夹即卸载。
 
 ### 卸载
 
@@ -351,10 +351,10 @@ pyinstaller --clean --noconfirm QuickText.spec
 需要安装 [Inno Setup 6](https://jrsoftware.org/isinfo.php)。
 
 ```powershell
-& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=0.1.1 QuickText.iss
+& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=0.1.2 QuickText.iss
 ```
 
-产物 `dist\QuickText_setup_0.1.1.exe`。不传 `/DMyAppVersion` 则使用脚本内默认值。
+产物 `dist\QuickText_setup_0.1.2.exe`。不传 `/DMyAppVersion` 则使用脚本内默认值。
 
 ### 正式发布（CI 自动完成）
 
@@ -370,9 +370,9 @@ GitHub Actions（[build.yml](file:///d:/软件开发/楼月/.github/workflows/bu
 
 1. 安装 Python 3.13 与依赖，`choco install innosetup`
 2. 读取 `version.py` 的版本号（必须为 `x.y.z` 三段式），exe、安装包、Release 三处共用
-3. PyInstaller 打 exe → 校验产物存在 → Inno Setup 打安装包
+3. PyInstaller 打 exe → 校验产物存在 → Inno Setup 打安装包 → 连同 `QuickText.exe`、README、隐私说明打包成绿色版 zip
 4. 上传 Actions 产物（保留 30 天）
-5. 远端还没有 `vX.Y.Z` 这个 tag 时，自动打 tag 并发布 GitHub Release，附上安装包和自动生成的更新说明；该版本已发布过则只构建不重复发布
+5. 远端还没有 `vX.Y.Z` 这个 tag 时，自动打 tag 并发布 GitHub Release，附上安装包、绿色版 zip 和自动生成的更新说明；该版本已发布过则只构建不重复发布
 
 例外情况：手动推送 `git tag v0.1.2 && git push origin v0.1.2` 时直接以 tag 名构建并发布；在 Actions 页面**手动触发**（`workflow_dispatch`）则只构建、产物留在 Actions 里，不发 Release——适合验证改动是否可打包。
 

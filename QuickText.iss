@@ -3,10 +3,10 @@
 
 #define MyAppName "QuickText"
 #define MyAppTitle "QuickText 文本自动输入器"
-; 版本由 CI 从 quicktext/version.py 读取后注入：ISCC.exe /DMyAppVersion=0.1.1 QuickText.iss
+; 版本由 CI 从 quicktext/version.py 读取后注入：ISCC.exe /DMyAppVersion=0.1.2 QuickText.iss
 ; 不传则沿用下面这个默认值（应与 quicktext/version.py 保持一致）
 #ifndef MyAppVersion
-  #define MyAppVersion "0.1.1"
+  #define MyAppVersion "0.1.2"
 #endif
 #define MyAppExe "QuickText.exe"
 
